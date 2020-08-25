@@ -131,7 +131,9 @@ module Bugsnag
       @exit_handler_added = true
       at_exit do
         if $!
-          Bugsnag.notify($!, true) do |report|
+          exception = unwrap_bundler_exception($!)
+
+          Bugsnag.notify(exception, true) do |report|
             report.severity = 'error'
             report.severity_reason = {
               :type => Bugsnag::Report::UNHANDLED_EXCEPTION
@@ -139,6 +141,37 @@ module Bugsnag
           end
         end
       end
+    end
+
+    ##
+    # When running a script with 'bundle exec', uncaught exceptions will be
+    # converted to "friendly errors" which has the side effect of wrapping them
+    # in a SystemExit
+    #
+    # By default we ignore SystemExit, so need to unwrap the original exception
+    # in order to avoid ignoring real errors
+    #
+    # @param exception [Exception]
+    # @return [Exception]
+    def unwrap_bundler_exception(exception)
+      running_in_bundler = ENV.include?('BUNDLE_BIN_PATH')
+
+      return exception unless running_in_bundler
+      return exception unless exception.is_a?(SystemExit)
+      return exception unless exception.respond_to?(:cause)
+
+      # Try to find a non-SystemExit exception in the exception chain — this
+      # should be the exception that Bundler has wrapped
+      unwrapped_exception = exception
+
+      until unwrapped_exception.cause.nil?
+        unwrapped_exception = unwrapped_exception.cause
+
+        return unwrapped_exception unless unwrapped_exception.is_a?(SystemExit)
+      end
+
+      # If we were unable to find a non-SystemExit, return the original exception
+      exception
     end
 
     ##
